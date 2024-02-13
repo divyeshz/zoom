@@ -7,30 +7,41 @@ use Illuminate\Support\Facades\Http;
 
 class ZoomController extends Controller
 {
-    public function __construct()
-    {
-    }
-
+    /**
+     * Initiate OAuth step 1 by redirecting the user to the authorization URL.
+     *
+     * @return \Illuminate\Http\RedirectResponse The redirection to the authorization URL.
+     */
     public function get_oauth_step_1()
     {
-        $redirectURL  = 'http://localhost:8001/zoom/auth/callback';
-        $authorizeURL = 'https://zoom.us/oauth/authorize';
+        // Retrieve OAuth related configuration from environment variables
+        $redirectURL    = env('ZOOM_REDIRECT_URL');
+        $authorizeURL   = env('ZOOM_AUTHORIZE_URL');
+        $clientID       = env('ZOOM_CLIENT_ID');
 
-        $clientID     = env("ZOOM_CLIENT_ID");
-
+        // Construct the authorization URL with necessary parameters
         $authURL = $authorizeURL . '?client_id=' . $clientID . '&redirect_uri=' . $redirectURL . '&response_type=code&scope=meeting:write meeting:read&state=xyz';
 
+        // Redirect the user to the authorization URL
         return redirect()->away($authURL);
     }
 
+
+    /**
+     * Perform OAuth step 2 to obtain an access token.
+     *
+     * @param string $code The authorization code received from OAuth step 1.
+     * @return array The response containing the access token.
+     */
     private function get_oauth_step_2($code)
     {
-        $tokenURL    = 'https://zoom.us/oauth/token';
-        $redirectURL = 'http://localhost:8001/zoom/auth/callback';
+        // Retrieve OAuth related configuration from environment variables
+        $clientID       = env('ZOOM_CLIENT_ID');
+        $clientSecret   = env('ZOOM_CLIENT_SECRET');
+        $redirectURL    = env('ZOOM_REDIRECT_URL');
+        $tokenURL       = env('ZOOM_TOKEN_URL');
 
-        $clientID     = env("ZOOM_CLIENT_ID");
-        $clientSecret = env("ZOOM_CLIENT_SECRET");
-
+        // Send a POST request to the token URL to exchange the authorization code for an access token
         $response = Http::asForm()->post($tokenURL, [
             'grant_type' => 'authorization_code',
             'code' => $code,
@@ -39,33 +50,67 @@ class ZoomController extends Controller
             'client_secret' => $clientSecret,
         ]);
 
-        $response = json_decode($response, true);
-        return $response;
+        // Decode the JSON response and return it
+        return json_decode($response->body(), true);
     }
 
+
+    /**
+     * Handle the index page request.
+     *
+     * @param \Illuminate\Http\Request $request The HTTP request.
+     * @return mixed The response for the index page request.
+     */
     public function index(Request $request)
     {
+        // Check if 'code' parameter is present in the request
         if (!$request->code) {
+            // If 'code' parameter is not present, initiate OAuth step 1
             $this->get_oauth_step_1();
         } else {
+            // If 'code' parameter is present, proceed with OAuth step 2
             $getToken = $this->get_oauth_step_2($request->code);
 
+            // Store the access token in the session
             session(['token' => $getToken['access_token']]);
 
-            // Example: Redirect to create a meeting page after successful OAuth
+            // Redirect to the create meeting page after successful OAuth
             return redirect()->route('meeting.create');
         }
     }
 
+
+    /**
+     * Display the page for creating a new meeting.
+     *
+     * @param \Illuminate\Http\Request $request The HTTP request.
+     * @return \Illuminate\View\View The view for creating a new meeting.
+     */
     public function createMeetingPage(Request $request)
     {
+        // Return the view for creating a new meeting
         return view('meeting.create');
     }
 
+
+    /**
+     * Store a new meeting with the provided details for the authenticated user.
+     * This function requires authentication with Zoom API via JWT token.
+     *
+     * @param \Illuminate\Http\Request $request The HTTP request containing meeting details.
+     * @return \Illuminate\Http\RedirectResponse|\Illuminate\View\View Redirect back with an error message if authentication fails or return a view with a list of meetings on success.
+     */
     public function storeMeeting(Request $request)
     {
+        // Retrieve JWT token from session
         $jwtToken = session()->get('token');
 
+        // Check if JWT token exists
+        if (!$jwtToken) {
+            return redirect()->route('zoom.auth')->with('error', 'Please authenticate first');
+        }
+
+        // Send POST request to create a new meeting on Zoom API
         $response =  Http::withToken($jwtToken)
             ->post('https://api.zoom.us/v2/users/me/meetings', [
                 'topic'         => $request->topic ?? 'New Meeting General Talk',
@@ -76,48 +121,96 @@ class ZoomController extends Controller
                 'agenda'        => $request->agenda ?? 'Interview Meeting',
                 'timezone'      => 'Asia/Kolkata',
             ]);
+
+        // If the response is successful, fetch the list of meetings
         if ($response) {
             $response = Http::withToken($jwtToken)
                 ->get('https://api.zoom.us/v2/users/me/meetings');
 
+            // Extract list of meetings from response JSON
             $meetings = $response->json()['meetings'];
         }
 
+        // Return a view with a list of meetings
         return view('meeting.list', compact('meetings'));
     }
 
+    /**
+     * Display a page listing all meetings associated with the authenticated user.
+     * This function requires authentication with Zoom API via JWT token.
+     *
+     * @param \Illuminate\Http\Request $request The HTTP request.
+     * @return \Illuminate\Http\RedirectResponse|\Illuminate\View\View Redirect back with an error message if authentication fails or return a view with a list of meetings on success.
+     */
     public function listAllMeetingsPage(Request $request)
     {
+        // Retrieve JWT token from session
         $jwtToken = session()->get('token');
 
-        $response = Http::withToken($jwtToken)
-            ->get('https://api.zoom.us/v2/users/me/meetings');
-
-        $meetings = $response->json()['meetings'];
-        return view('meeting.list', compact('meetings'));
-    }
-
-    public function getMeetingDetailsPage(Request $request, $meetingId)
-    {
-        $jwtToken = session()->get('token');
-
-        $response = Http::withToken($jwtToken)
-            ->get("https://api.zoom.us/v2/meetings/{$meetingId}");
-
-        $meeting = $response->json();
-
-        return view('meeting.details', compact('meeting'));
-    }
-
-    public function updateMeeting(Request $request, $meetingId)
-    {
-
-        $jwtToken = session()->get('token');
-
+        // Check if JWT token exists
         if (!$jwtToken) {
             return redirect()->route('zoom.auth')->with('error', 'Please authenticate first');
         }
 
+        // Send GET request to Zoom API to fetch all meetings for the authenticated user
+        $response = Http::withToken($jwtToken)
+            ->get('https://api.zoom.us/v2/users/me/meetings');
+
+        // Extract list of meetings from response JSON
+        $meetings = $response->json()['meetings'];
+
+        // Return a view with a list of meetings
+        return view('meeting.list', compact('meetings'));
+    }
+
+    /**
+     * Retrieve details of a Zoom meeting with the provided meeting ID.
+     * This function requires authentication with Zoom API via JWT token.
+     *
+     * @param \Illuminate\Http\Request $request The HTTP request.
+     * @param int $meetingId The ID of the meeting to fetch details for.
+     * @return \Illuminate\Http\RedirectResponse|\Illuminate\View\View Redirect back with an error message if authentication fails or return a view with meeting details on success.
+     */
+    public function getMeetingDetailsPage(Request $request, $meetingId)
+    {
+        // Retrieve JWT token from session
+        $jwtToken = session()->get('token');
+
+        // Check if JWT token exists
+        if (!$jwtToken) {
+            return redirect()->route('zoom.auth')->with('error', 'Please authenticate first');
+        }
+
+        // Send GET request to Zoom API to fetch meeting details
+        $response = Http::withToken($jwtToken)
+            ->get("https://api.zoom.us/v2/meetings/{$meetingId}");
+
+        // Extract meeting details from response JSON
+        $meeting = $response->json();
+
+        // Return a view with meeting details
+        return view('meeting.details', compact('meeting'));
+    }
+
+    /**
+     * Update a Zoom meeting with the provided meeting ID.
+     * This function requires authentication with Zoom API via JWT token.
+     *
+     * @param \Illuminate\Http\Request $request The HTTP request containing updated meeting details.
+     * @param int $meetingId The ID of the meeting to be updated.
+     * @return \Illuminate\Http\RedirectResponse|\Illuminate\Http\Client\Response Redirect back with an error message if authentication fails or return JSON response from Zoom API on success.
+     */
+    public function updateMeeting(Request $request, $meetingId)
+    {
+        // Retrieve JWT token from session
+        $jwtToken = session()->get('token');
+
+        // Check if JWT token exists
+        if (!$jwtToken) {
+            return redirect()->route('zoom.auth')->with('error', 'Please authenticate first');
+        }
+
+        // Send PATCH request to Zoom API to update the meeting
         $response = Http::withToken($jwtToken)
             ->patch("https://api.zoom.us/v2/meetings/{$meetingId}", [
                 'topic'         => $request->topic,
@@ -125,6 +218,7 @@ class ZoomController extends Controller
                 'agenda'        => $request->agenda,
             ]);
 
+        // Check if the request was successful
         if ($response->successful()) {
             return $response->json();
         } else {

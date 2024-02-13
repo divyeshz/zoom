@@ -1,8 +1,6 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\ZoomController;
-use App\Http\Controllers\TestZoom;
 
 /*
 |--------------------------------------------------------------------------
@@ -19,21 +17,24 @@ Route::get('/', function () {
     return view('welcome')->with('respond', 'MEETING API RESPOND WILL COME IN THIS SECTION');
 });
 
-Route::get('start', [ZoomController::class, 'index']);
-Route::any('zoom-meeting-create', [ZoomController::class, 'index']);
+// ZoomController routes
+Route::controller('ZoomController')->group(function () {
+    Route::get('start', 'index');
+    Route::any('zoom-meeting-create', 'index');
 
-// Route for initiating the OAuth flow
-Route::get('/zoom/auth', [ZoomController::class, 'get_oauth_step_1'])->name('zoom.auth');
+    // Route for initiating the OAuth flow
+    Route::get('/zoom/auth', 'get_oauth_step_1')->name('zoom.auth');
 
-// Route for handling OAuth callback
-Route::get('zoom/auth/callback', [ZoomController::class, 'index']);
+    // Route for handling OAuth callback
+    Route::get('zoom/auth/callback', 'index');
 
-// Route for creating a meeting
-Route::get('zoom/meeting/create', [ZoomController::class, 'createMeetingPage'])->name('meeting.create');
-Route::post('zoom/meeting/store', [ZoomController::class, 'storeMeeting'])->name('meeting.store');
+    // Route for creating a meeting
+    Route::get('zoom/meeting/create', 'createMeetingPage')->name('meeting.create');
+    Route::post('zoom/meeting/store', 'storeMeeting')->name('meeting.store');
 
-// Route for getting details of a specific meeting
-Route::get('/zoom/meeting/{meetingId}', [ZoomController::class, 'getMeetingDetailsPage'])->name('meeting.details');
+    // Route for getting details of a specific meeting
+    Route::get('/zoom/meeting/{meetingId}', 'getMeetingDetailsPage')->name('meeting.details');
 
-// Route for listing all meetings
-Route::get('/zoom/meetings', [ZoomController::class, 'listAllMeetingsPage'])->name('meeting.list');
+    // Route for listing all meetings
+    Route::get('/zoom/meetings', 'listAllMeetingsPage')->name('meeting.list');
+});
